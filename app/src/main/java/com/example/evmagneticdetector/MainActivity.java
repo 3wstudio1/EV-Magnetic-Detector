@@ -22,11 +22,16 @@ public class MainActivity extends Activity implements SensorEventListener {
   SensorManager manager; Sensor sensor; Vibrator vibrator;
   TextView reading, status, sensitivity;
   Plot plot; double baseline=0, threshold=4, lastAlert=0;
-  long lastVibration=0; boolean initialized=false;
+  long lastVibration=0, lastUpdate=0; boolean initialized=false;
   public void onCreate(Bundle b) {
     super.onCreate(b);
+    final Thread.UncaughtExceptionHandler previous=Thread.getDefaultUncaughtExceptionHandler();
+    Thread.setDefaultUncaughtExceptionHandler((thread,error)->{
+      try { getSharedPreferences("diagnostics",MODE_PRIVATE).edit().putString("lastCrash",android.util.Log.getStackTraceString(error)).commit(); } catch(Exception ignored){}
+      if(previous!=null)previous.uncaughtException(thread,error);
+    });
     manager=(SensorManager)getSystemService(SENSOR_SERVICE);
-    sensor=manager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD);
+    sensor=manager==null?null:manager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD);
     vibrator=(Vibrator)getSystemService(Context.VIBRATOR_SERVICE);
     LinearLayout root=new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setPadding(24,28,24,20);
     root.setBackgroundColor(Color.rgb(12,20,31));
@@ -43,11 +48,17 @@ public class MainActivity extends Activity implements SensorEventListener {
     TextView note=new TextView(this); note.setText("Keep phone stationary. Magnetic anomalies do NOT identify vehicles or guarantee 10 m detection. Do not rely on this for road safety."); note.setTextColor(Color.LTGRAY); root.addView(note);
     setContentView(root);
     if(sensor==null){status.setText("No magnetometer found on this device");}
+    String crash=getSharedPreferences("diagnostics",MODE_PRIVATE).getString("lastCrash",null);
+    if(crash!=null){android.widget.Button details=new android.widget.Button(this);details.setText("Show previous crash details");root.addView(details);details.setOnClickListener(v->new android.app.AlertDialog.Builder(this).setTitle("Crash details").setMessage(crash).setPositiveButton("OK",null).show());}
   }
-  protected void onResume(){super.onResume();if(sensor!=null)manager.registerListener(this,sensor,SensorManager.SENSOR_DELAY_FASTEST);}
-  protected void onPause(){super.onPause();manager.unregisterListener(this);}
+  protected void onResume(){super.onResume();if(sensor!=null && manager!=null)manager.registerListener(this,sensor,SensorManager.SENSOR_DELAY_UI);}
+  protected void onPause(){super.onPause();if(manager!=null)manager.unregisterListener(this);}
   public void onAccuracyChanged(Sensor s,int a){}
   public void onSensorChanged(SensorEvent e){
+    long tick=android.os.SystemClock.elapsedRealtime();
+    if(tick-lastUpdate<80)return;
+    lastUpdate=tick;
+    if(e.values==null||e.values.length<3||reading==null||status==null||plot==null)return;
     double x=e.values[0],y=e.values[1],z=e.values[2],m=Math.sqrt(x*x+y*y+z*z);
     if(!initialized){baseline=m;initialized=true;}
     double deviation=Math.abs(m-baseline);
@@ -58,7 +69,7 @@ public class MainActivity extends Activity implements SensorEventListener {
     status.setTextColor(alert?Color.YELLOW:Color.LTGRAY);
     plot.add((float)deviation,(float)threshold);
     long now=android.os.SystemClock.elapsedRealtime();
-    if(alert && now-lastVibration>1800){lastVibration=now;if(vibrator!=null&&vibrator.hasVibrator())vibrator.vibrate(VibrationEffect.createOneShot(220,VibrationEffect.DEFAULT_AMPLITUDE));}
+    if(alert && now-lastVibration>1800){lastVibration=now;try{if(vibrator!=null&&vibrator.hasVibrator())vibrator.vibrate(VibrationEffect.createOneShot(220,VibrationEffect.DEFAULT_AMPLITUDE));}catch(RuntimeException ignored){}}
   }
   class Plot extends View{
     ArrayDeque<Float> points=new ArrayDeque<>();Paint paint=new Paint(3);float limit=4;
